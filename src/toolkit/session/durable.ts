@@ -51,6 +51,49 @@ interface Reminder {
   text: string;
 }
 
+type StoredAttachment = {
+  kind: string;
+  fileId?: string;
+  fileUniqueId?: string;
+  fileName?: string;
+  mimeType?: string;
+  size?: number;
+};
+type StoredFeedback = {
+  id: number;
+  user_id: number;
+  username?: string;
+  timestamp: number;
+  text: string;
+  attachments: StoredAttachment[];
+  status: "active" | "deleted";
+  last_edited?: number;
+  deleted_at?: number;
+};
+type FeedbackDb = {
+  nextId: number;
+  items: Record<string, StoredFeedback>;
+  userItemIds: Record<string, number[]>;
+  users: Record<string, { telegram_id: number; display_name: string; username?: string }>;
+};
+const FEEDBACK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function emptyFeedbackDb(): FeedbackDb {
+  return { nextId: 1, items: {}, userItemIds: {}, users: {} };
+}
+
+function purgeFeedback(db: FeedbackDb, at: number): number {
+  let removed = 0;
+  for (const [key, item] of Object.entries(db.items)) {
+    if (item.status === "deleted" && item.deleted_at !== undefined && at - item.deleted_at >= FEEDBACK_RETENTION_MS) {
+      delete db.items[key];
+      db.userItemIds[String(item.user_id)] = (db.userItemIds[String(item.user_id)] ?? []).filter((id) => id !== item.id);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 /**
  * createDurableSessionStorage — a grammY StorageAdapter that routes each session
  * key to its own ChatDO instance. Pass to buildBot({ storage }) in the Worker.
@@ -152,6 +195,55 @@ export class ChatDO {
       await this.state.storage.put("reminders", list);
       await this.rearm(list);
       return new Response(null, { status: 204 });
+    }
+
+    // Application records for Feedback Collector. A dedicated singleton DO is
+    // addressed as "feedback-store" by the handler, so this is globally
+    // consistent without scanning a Redis/D1 keyspace. User and item indexes
+    // make every read direct and bounded.
+    if (url.pathname === "/feedback" && request.method === "POST") {
+      const body = (await request.json()) as {
+        action: string; at: number; user?: { telegram_id: number; display_name: string; username?: string };
+        userId?: number; id?: number; content?: { text: string; attachments: StoredAttachment[] };
+      };
+      const db = (await this.state.storage.get<FeedbackDb>("feedback-db")) ?? emptyFeedbackDb();
+      const at = Number.isFinite(body.at) ? body.at : 0;
+      const userId = body.userId;
+      const item = body.id === undefined ? undefined : db.items[String(body.id)];
+      let response: unknown;
+      if (body.action === "user" && body.user) {
+        db.users[String(body.user.telegram_id)] = body.user;
+        response = { ok: true };
+      } else if (body.action === "submit" && body.user && body.content) {
+        db.users[String(body.user.telegram_id)] = body.user;
+        const id = db.nextId++;
+        const created: StoredFeedback = { id, user_id: body.user.telegram_id, username: body.user.username, timestamp: at, text: body.content.text, attachments: body.content.attachments, status: "active" };
+        db.items[String(id)] = created;
+        (db.userItemIds[String(created.user_id)] ??= []).push(id);
+        response = created;
+      } else if (body.action === "mine" && userId !== undefined) {
+        purgeFeedback(db, at);
+        const includeDeleted = (body as { includeDeleted?: boolean }).includeDeleted === true;
+        response = (db.userItemIds[String(userId)] ?? [])
+          .map((id) => db.items[String(id)])
+          .filter((v): v is StoredFeedback => Boolean(v) && (includeDeleted || v.status === "active"));
+      } else if (body.action === "owned" && userId !== undefined) {
+        response = item?.user_id === userId ? item : null;
+      } else if (body.action === "update" && userId !== undefined && body.content) {
+        if (!item || item.user_id !== userId || item.status !== "active") response = null;
+        else { item.text = body.content.text; item.attachments = body.content.attachments; item.last_edited = at; response = item; }
+      } else if (body.action === "delete" && userId !== undefined) {
+        if (!item || item.user_id !== userId || item.status !== "active") response = { ok: false };
+        else { item.status = "deleted"; item.deleted_at = at; response = { ok: true }; }
+      } else if (body.action === "purge") {
+        response = { removed: purgeFeedback(db, at) };
+      } else if (body.action === "export") {
+        purgeFeedback(db, at); response = Object.values(db.items);
+      } else {
+        return new Response("bad feedback request", { status: 400 });
+      }
+      await this.state.storage.put("feedback-db", db);
+      return Response.json(response);
     }
 
     return new Response("not found", { status: 404 });

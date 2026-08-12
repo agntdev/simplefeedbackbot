@@ -14,12 +14,12 @@ describe("buildBot handler loader", () => {
     expect(suite.passed).toBeGreaterThan(0);
   });
 
-  it("unknown input falls through to the global fallback", async () => {
+  it("unknown commands fall through to the global fallback", async () => {
     const suite = await runSpecs(() => buildBot("test-token"), [
       parseBotSpec({
-        name: "unknown text hits the fallback",
+        name: "unknown command hits the fallback",
         steps: [
-          { send: { text: "qwerty" },
+          { send: { text: "/unknown" },
             expect: [{ method: "sendMessage", payload: { text: "Sorry, I didn't understand that. Try /help." } }] },
         ],
       }),

@@ -1,19 +1,53 @@
 [
   {
-    "name": "/myfeedback",
+    "name": "/myfeedback has a helpful empty state",
     "steps": [
       {
         "expect": [
           {
             "method": "sendMessage",
             "payload": {
-              "text": "List user's feedback items with actions"
+              "text": "No feedback yet — tap Submit feedback to add one."
             }
           }
         ],
         "send": {
           "text": "/myfeedback"
         }
+      }
+    ]
+  }
+  ,
+  {
+    "name": "a user can view edit and delete their own feedback",
+    "steps": [
+      {
+        "send": { "text": "First note" },
+        "expect": [{ "method": "sendMessage", "payload": { "text": "Feedback received. Your reference is #1." } }]
+      },
+      {
+        "send": { "text": "/myfeedback" },
+        "expect": [{ "method": "sendMessage", "payload": { "text": "Your feedback (1/1)" } }]
+      },
+      {
+        "send": { "callback": "fb:view:1" },
+        "expect": [{ "method": "editMessageText", "payload": { "text": "Feedback #1\n\nFirst note" } }]
+      },
+      {
+        "send": { "callback": "fb:edit:1" },
+        "expect": [{ "method": "editMessageText", "payload": { "text": "Send the replacement text, photo, voice message, or file for feedback #1." } }]
+      },
+      {
+        "send": { "text": "Updated note" },
+        "expect": [{ "method": "sendMessage", "payload": { "text": "Feedback #1 has been updated." } }]
+      },
+      {
+        "send": { "callback": "fb:delete:1" },
+        "expect": [{ "method": "editMessageText", "payload": { "text": "Delete feedback #1? It will be kept for 30 days before removal." } }]
+      },
+      {
+        "send": { "callback": "fb:delete:1:yes" },
+        "expect": [{ "method": "editMessageText", "payload": { "text": "Feedback #1 was deleted. It will be removed after 30 days." } }]
       }
     ]
   }
