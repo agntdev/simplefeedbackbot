@@ -1,19 +1,49 @@
 [
   {
-    "name": "Submit feedback",
+    "name": "/send explains how to submit feedback",
     "steps": [
       {
         "expect": [
           {
             "method": "sendMessage",
             "payload": {
-              "text": "Send text/photo/voice/file to submit feedback"
+              "text": "Send your feedback as text, a photo, a voice message, or a file."
             }
           }
         ],
         "send": {
           "text": "/send"
         }
+      }
+    ]
+  }
+  ,
+  {
+    "name": "a text message is saved with a reference",
+    "steps": [
+      {
+        "send": { "text": "The service was excellent." },
+        "expect": [{ "method": "sendMessage", "payload": { "text": "Feedback received. Your reference is #1." } }]
+      }
+    ]
+  },
+  {
+    "name": "an attachment without text is accepted as feedback",
+    "steps": [
+      {
+        "send": {
+          "update": {
+            "update_id": 900,
+            "message": {
+              "message_id": 900,
+              "date": 0,
+              "chat": { "id": 1, "type": "private", "first_name": "Test" },
+              "from": { "id": 1, "is_bot": false, "first_name": "Test" },
+              "photo": [{ "file_id": "photo-file", "file_unique_id": "photo-unique", "width": 20, "height": 20, "file_size": 120 }]
+            }
+          }
+        },
+        "expect": [{ "method": "sendMessage", "payload": { "text": "Feedback received. Your reference is #1." } }]
       }
     ]
   }
