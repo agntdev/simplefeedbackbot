@@ -39,7 +39,8 @@ export type Language = "en" | "ru";
 export type FeedbackUser = { telegram_id: number; display_name: string; username?: string; language?: Language };
 export type AdminRole = { user_id: number; granted_by: number; granted_at: number };
 export type AdminAudit = { action: "grant" | "revoke" | "broadcast"; target_user_id?: number; actor_id: number; timestamp: number; detail?: string };
-export type BroadcastRecord = { id: number; initiator_id: number; timestamp: number; recipients_count: number; status: "sent" | "scheduled"; text: string; attachments: Attachment[]; buttons: Array<{ text: string; url: string }>; scheduled_at?: number };
+export type BroadcastAck = { broadcast_id: number; user_id: number; username?: string; timestamp: number };
+export type BroadcastRecord = { id: number; initiator_id: number; timestamp: number; recipients_count: number; delivered_count: number; recipient_ids: number[]; status: "sent" | "scheduled"; text: string; attachments: Attachment[]; buttons: Array<{ text: string; url: string }>; scheduled_at?: number };
 
 export type FeedbackDatabase = {
   nextId: number;
@@ -50,6 +51,7 @@ export type FeedbackDatabase = {
   admins: Record<string, AdminRole>;
   audits: AdminAudit[];
   broadcasts: BroadcastRecord[];
+  broadcastAcks: BroadcastAck[];
   nextBroadcastId: number;
 };
 type FeedbackSession = { feedbackFallback?: FeedbackDatabase; editingFeedbackId?: number; replyingFeedbackId?: number };
@@ -66,7 +68,7 @@ export function setClockForTests(next?: () => number): void {
 }
 
 function emptyDatabase(): FeedbackDatabase {
-  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {}, admins: {}, audits: [], broadcasts: [], nextBroadcastId: 1 };
+  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {}, admins: {}, audits: [], broadcasts: [], broadcastAcks: [], nextBroadcastId: 1 };
 }
 
 function userFromCtx(ctx: Ctx): FeedbackUser | undefined {
@@ -299,6 +301,47 @@ export async function recordBroadcast(ctx: Ctx, record: Omit<BroadcastRecord, "i
   const db = fallback(ctx); const saved = { ...record, id: db.nextBroadcastId++ };
   db.broadcasts.push(saved); db.audits.push({ action: "broadcast", actor_id: record.initiator_id, timestamp: record.timestamp, detail: `${record.recipients_count} recipients` });
   return saved;
+}
+
+export async function setBroadcastDelivered(ctx: Ctx, id: number, delivered: number): Promise<BroadcastRecord | undefined> {
+  const remote = await workerRequest<BroadcastRecord | null>(ctx, "broadcast:delivered", { id, delivered });
+  if (remote !== undefined) return remote ?? undefined;
+  const record = fallback(ctx).broadcasts.find((entry) => entry.id === id);
+  if (!record) return undefined;
+  record.delivered_count = delivered;
+  return record;
+}
+
+export async function broadcastById(ctx: Ctx, id: number): Promise<BroadcastRecord | undefined> {
+  const remote = await workerRequest<BroadcastRecord | null>(ctx, "broadcast:get", { id });
+  if (remote !== undefined) return remote ?? undefined;
+  return fallback(ctx).broadcasts.find((entry) => entry.id === id);
+}
+
+export async function broadcasts(ctx: Ctx): Promise<BroadcastRecord[]> {
+  const remote = await workerRequest<BroadcastRecord[]>(ctx, "broadcast:list", {});
+  if (remote !== undefined) return remote;
+  return [...fallback(ctx).broadcasts].sort((a, b) => b.id - a.id);
+}
+
+export async function broadcastAcks(ctx: Ctx, broadcastId: number): Promise<BroadcastAck[]> {
+  const remote = await workerRequest<BroadcastAck[]>(ctx, "broadcast:acks", { id: broadcastId });
+  if (remote !== undefined) return remote;
+  return fallback(ctx).broadcastAcks.filter((ack) => ack.broadcast_id === broadcastId);
+}
+
+/** Records one acknowledgement per recipient. The store validates that the user
+ * was selected for this broadcast, so callback data cannot expose another list. */
+export async function acknowledgeBroadcast(ctx: Ctx, broadcastId: number): Promise<"saved" | "duplicate" | "unavailable"> {
+  if (!ctx.from) return "unavailable";
+  const user = userFromCtx(ctx);
+  const remote = await workerRequest<{ result: "saved" | "duplicate" | "unavailable" }>(ctx, "broadcast:ack", { id: broadcastId, user });
+  if (remote !== undefined) return remote.result;
+  const db = fallback(ctx); const record = db.broadcasts.find((entry) => entry.id === broadcastId);
+  if (!record || !record.recipient_ids.includes(ctx.from.id)) return "unavailable";
+  if (db.broadcastAcks.some((ack) => ack.broadcast_id === broadcastId && ack.user_id === ctx.from!.id)) return "duplicate";
+  db.broadcastAcks.push({ broadcast_id: broadcastId, user_id: ctx.from.id, username: user?.username, timestamp: now() });
+  return "saved";
 }
 
 export async function scheduleBroadcast(ctx: Ctx, record: Omit<BroadcastRecord, "id">, recipients: number[]): Promise<BroadcastRecord> {

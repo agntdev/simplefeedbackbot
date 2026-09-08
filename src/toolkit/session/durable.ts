@@ -89,14 +89,15 @@ type FeedbackDb = {
   users: Record<string, { telegram_id: number; display_name: string; username?: string; language?: "en" | "ru" }>;
   admins: Record<string, { user_id: number; granted_by: number; granted_at: number }>;
   audits: Array<{ action: "grant" | "revoke" | "broadcast"; target_user_id?: number; actor_id: number; timestamp: number; detail?: string }>;
-  broadcasts: unknown[];
+  broadcasts: Array<Record<string, unknown>>;
+  broadcastAcks: Array<{ broadcast_id: number; user_id: number; username?: string; timestamp: number }>;
   nextBroadcastId: number;
 };
 type ScheduledBroadcast = { record: Record<string, unknown>; recipients: number[] };
 const FEEDBACK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function emptyFeedbackDb(): FeedbackDb {
-  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {}, admins: {}, audits: [], broadcasts: [], nextBroadcastId: 1 };
+  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {}, admins: {}, audits: [], broadcasts: [], broadcastAcks: [], nextBroadcastId: 1 };
 }
 
 function purgeFeedback(db: FeedbackDb, at: number): number {
@@ -220,14 +221,14 @@ export class ChatDO {
     // make every read direct and bounded.
     if (url.pathname === "/feedback" && request.method === "POST") {
       const body = (await request.json()) as {
-        action: string; at: number; user?: { telegram_id: number; display_name: string; username?: string };
+        action: string; at: number; user?: { telegram_id: number; display_name: string; username?: string; language?: "en" | "ru" };
         userId?: number; id?: number; entryId?: number; sent_status?: StoredThreadEntry["sent_status"];
         content?: { text: string; attachments: StoredAttachment[] }; entry?: Omit<StoredThreadEntry, "id">;
-        targetUserId?: number; actorId?: number; record?: Record<string, unknown>; recipients?: number[];
+        targetUserId?: number; actorId?: number; record?: Record<string, unknown>; recipients?: number[]; delivered?: number;
       };
       const db = (await this.state.storage.get<FeedbackDb>("feedback-db")) ?? emptyFeedbackDb();
       // Records written by an earlier release are upgraded in place.
-      db.admins ??= {}; db.audits ??= []; db.broadcasts ??= []; db.nextBroadcastId ??= 1;
+      db.admins ??= {}; db.audits ??= []; db.broadcasts ??= []; db.broadcastAcks ??= []; db.nextBroadcastId ??= 1;
       const at = Number.isFinite(body.at) ? body.at : 0;
       const userId = body.userId;
       const item = body.id === undefined ? undefined : db.items[String(body.id)];
@@ -271,12 +272,12 @@ export class ChatDO {
       } else if (body.action === "audits") {
         response = [...db.audits].sort((a, b) => b.timestamp - a.timestamp);
       } else if (body.action === "broadcast:record" && body.record) {
-        const record = { ...body.record, id: db.nextBroadcastId++ };
+        const record = { ...body.record, id: db.nextBroadcastId++, delivered_count: Number(body.record.delivered_count) || 0, recipient_ids: Array.isArray(body.record.recipient_ids) ? body.record.recipient_ids : [] };
         db.broadcasts.push(record);
         db.audits.push({ action: "broadcast", actor_id: Number(body.record.initiator_id), timestamp: at, detail: `${Number(body.record.recipients_count) || 0} recipients` });
         response = record;
       } else if (body.action === "broadcast:schedule" && body.record && Array.isArray(body.recipients)) {
-        const record = { ...body.record, id: db.nextBroadcastId++, status: "scheduled" };
+        const record = { ...body.record, id: db.nextBroadcastId++, status: "scheduled", delivered_count: 0, recipient_ids: body.recipients };
         db.broadcasts.push(record);
         db.audits.push({ action: "broadcast", actor_id: Number(body.record.initiator_id), timestamp: at, detail: `${body.recipients.length} scheduled recipients` });
         const jobs = (await this.state.storage.get<ScheduledBroadcast[]>("scheduled-broadcasts")) ?? [];
@@ -285,6 +286,22 @@ export class ChatDO {
         const due = Number(body.record.scheduled_at);
         if (Number.isFinite(due)) await this.state.storage.setAlarm(due);
         response = record;
+      } else if (body.action === "broadcast:get") {
+        response = db.broadcasts.find((record) => Number(record.id) === body.id) ?? null;
+      } else if (body.action === "broadcast:list") {
+        response = [...db.broadcasts].sort((a, b) => Number(b.id) - Number(a.id));
+      } else if (body.action === "broadcast:delivered" && body.id !== undefined) {
+        const record = db.broadcasts.find((value) => Number(value.id) === body.id);
+        if (!record) response = null;
+        else { record.delivered_count = Number(body.delivered) || 0; response = record; }
+      } else if (body.action === "broadcast:acks" && body.id !== undefined) {
+        response = db.broadcastAcks.filter((ack) => ack.broadcast_id === body.id);
+      } else if (body.action === "broadcast:ack" && body.id !== undefined && body.user) {
+        const record = db.broadcasts.find((value) => Number(value.id) === body.id);
+        const recipients = Array.isArray(record?.recipient_ids) ? record.recipient_ids : [];
+        if (!record || !recipients.includes(body.user.telegram_id)) response = { result: "unavailable" };
+        else if (db.broadcastAcks.some((ack) => ack.broadcast_id === body.id && ack.user_id === body.user!.telegram_id)) response = { result: "duplicate" };
+        else { db.broadcastAcks.push({ broadcast_id: body.id, user_id: body.user.telegram_id, username: body.user.username, timestamp: at }); response = { result: "saved" }; }
       } else if (body.action === "update" && userId !== undefined && body.content) {
         if (!item || item.user_id !== userId || item.status !== "active") response = null;
         else { item.text = body.content.text; item.attachments = body.content.attachments; item.last_edited = at; response = item; }
@@ -335,10 +352,17 @@ export class ChatDO {
   private async deliverBroadcast(job: ScheduledBroadcast): Promise<void> {
     const text = typeof job.record.text === "string" && job.record.text ? job.record.text : "Update from the team";
     const buttons = Array.isArray(job.record.buttons) ? job.record.buttons : [];
-    const reply_markup = buttons.length ? { inline_keyboard: [buttons.map((button) => ({ text: String((button as Record<string, unknown>).text), url: String((button as Record<string, unknown>).url) }))] } : undefined;
     const attachments = Array.isArray(job.record.attachments) ? job.record.attachments : [];
+    let delivered = 0;
+    const db = (await this.state.storage.get<FeedbackDb>("feedback-db")) ?? emptyFeedbackDb();
     for (const chat_id of job.recipients) {
       try {
+        const user = db.users[String(chat_id)];
+        const rows: Array<Array<{ text: string; url?: string; callback_data?: string }>> = buttons.length
+          ? [buttons.map((button) => ({ text: String((button as Record<string, unknown>).text), url: String((button as Record<string, unknown>).url) }))]
+          : [];
+        rows.push([{ text: user?.language === "ru" ? "Я вижу" : "I saw", callback_data: `broadcast:ack:${String(job.record.id)}` }]);
+        const reply_markup = { inline_keyboard: rows };
         await tg(this.env.BOT_TOKEN, "sendMessage", { chat_id, text, reply_markup });
         for (const attachment of attachments) {
           const a = attachment as Record<string, unknown>; const file = a.fileId;
@@ -346,8 +370,12 @@ export class ChatDO {
           const method = a.kind === "photo" ? "sendPhoto" : a.kind === "video" ? "sendVideo" : a.kind === "voice" ? "sendVoice" : "sendDocument";
           await tg(this.env.BOT_TOKEN, method, { chat_id, [method === "sendPhoto" ? "photo" : method === "sendVideo" ? "video" : method === "sendVoice" ? "voice" : "document"]: file });
         }
+        delivered += 1;
       } catch { /* Delivery to a blocked user must not stop the remaining audience. */ }
     }
+    const record = db.broadcasts.find((value) => Number(value.id) === Number(job.record.id));
+    if (record) record.delivered_count = delivered;
+    await this.state.storage.put("feedback-db", db);
   }
 
   private async rearm(list: Reminder[]): Promise<void> {
