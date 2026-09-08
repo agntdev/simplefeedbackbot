@@ -5,7 +5,7 @@ import { detailView, listView } from "../feedback/presentation.js";
 import { mine, owned, setEditingFeedbackId, softDelete } from "../feedback/store.js";
 import { language, tr } from "../i18n.js";
 
-registerMainMenuItem({ label: "My feedback", data: "fb:list:0", order: 20 });
+registerMainMenuItem({ label: "My questions", data: "fb:list:0", order: 20 });
 const composer = new Composer<Ctx>();
 async function showList(ctx: Ctx, page: number, edit: boolean): Promise<void> {
   const view = listView(await mine(ctx), page, await language(ctx));

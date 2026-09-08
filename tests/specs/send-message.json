@@ -1,13 +1,13 @@
 [
   {
-    "name": "/send explains how to submit feedback",
+    "name": "/send explains how to ask a question",
     "steps": [
       {
         "expect": [
           {
             "method": "sendMessage",
             "payload": {
-              "text": "Choose a format, or send text, a photo, video, voice message, or file."
+              "text": "Send your question as text, a photo, video, voice message, or file."
             }
           }
         ],
@@ -19,11 +19,14 @@
   }
   ,
   {
-    "name": "a text message is saved with a reference",
+    "name": "a text question is saved with a reference and receives the automatic reply",
     "steps": [
       {
         "send": { "text": "The service was excellent." },
-        "expect": [{ "method": "sendMessage" }]
+        "expect": [
+          { "method": "sendMessage", "payload": { "text": "Your question has been received (ID: 1)." } },
+          { "method": "sendMessage", "payload": { "text": "Принято в обработку, с вами свяжутся в течение ближайшего времени" } }
+        ]
       }
     ]
   },

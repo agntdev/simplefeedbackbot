@@ -1,10 +1,10 @@
 import { Composer } from "grammy";
 import type { Ctx } from "../bot.js";
-import { inlineButton, inlineKeyboard, registerMainMenuItem } from "../toolkit/index.js";
+import { adminChatId, inlineButton, inlineKeyboard, registerMainMenuItem } from "../toolkit/index.js";
 import { addThreadEntry, editingFeedbackId, markThreadStatus, messageContent, now, replyingFeedbackId, saveUser, setEditingFeedbackId, submit, update } from "../feedback/store.js";
 import { tr } from "../i18n.js";
 
-registerMainMenuItem({ label: "Submit feedback", data: "fb:submit", order: 10 });
+registerMainMenuItem({ label: "Ask a question", data: "fb:submit", order: 10 });
 const composer = new Composer<Ctx>();
 async function submitKeyboard(ctx: Ctx) { return inlineKeyboard([[inlineButton(await tr(ctx, "photo"), "fb:type:photo"), inlineButton(await tr(ctx, "video"), "fb:type:video"), inlineButton(await tr(ctx, "text"), "fb:type:text")], [inlineButton(await tr(ctx, "backMenu"), "menu:main")]]); }
 
@@ -45,15 +45,21 @@ composer.on("message", async (ctx, next) => {
     return;
   }
   const item = await submit(ctx, content);
-  if (!item) { await ctx.reply((await tr(ctx, "cancelled")) === "Отправка отменена." ? "Не удалось сохранить отзыв. Попробуйте ещё раз." : "Couldn't save your feedback. Please try again."); return; }
+  if (!item) { await ctx.reply((await tr(ctx, "cancelled")) === "Отправка отменена." ? "Не удалось сохранить вопрос. Попробуйте ещё раз." : "Couldn't save your question. Please try again."); return; }
   const text = await receiptText(ctx, item.id);
-  const ack = await addThreadEntry(ctx, item.id, { type: "ack", timestamp: now(), sent_status: "pending", body_text: text, attachments: [] });
+  const automaticReply = "Принято в обработку, с вами свяжутся в течение ближайшего времени";
+  const ack = await addThreadEntry(ctx, item.id, { type: "ack", timestamp: now(), sent_status: "pending", body_text: automaticReply, attachments: [] });
   ctx.session.feedbackType = undefined;
   try {
     await ctx.reply(text);
+    await ctx.reply(automaticReply);
     if (ack) await markThreadStatus(ctx, item.id, ack.id, "sent");
   } catch {
     if (ack) await markThreadStatus(ctx, item.id, ack.id, "failed");
+  }
+  const owner = adminChatId(ctx as Ctx & { env?: Record<string, unknown> });
+  if (owner) {
+    try { await ctx.api.sendMessage(owner, `New question #${item.id} is ready for review.`); } catch { /* The owner may have blocked the bot; the saved item remains in the desk. */ }
   }
 });
 

@@ -8,7 +8,7 @@
           {
             "method": "sendMessage",
             "payload": {
-              "text": "Use Submit feedback to send text, photos, voice messages, or files.\n\nUse My feedback to view, edit, or delete your own submissions. Deleted feedback is kept for 30 days, then removed. Only you can access your feedback."
+              "text": "Use Ask a question to send text, photos, voice messages, or files.\n\nUse My questions to view, edit, or delete your own submissions. Deleted questions are kept for 30 days, then removed. Only you can access your questions."
             }
           }
         ]

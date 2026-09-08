@@ -31,7 +31,8 @@ export function detailView(item: FeedbackItem, lang: Language): { text: string; 
   const content = item.text.trim() || trFor(lang, "attachmentOnly");
   const attachment = item.attachments.length ? `\n${trFor(lang, "attachments")}: ${item.attachments.map((a) => a.kind).join(", ")}` : "";
   const edited = item.last_edited ? `\n${trFor(lang, "updatedLabel")}` : "";
-  return { text: `Feedback #${item.id}\n\n${content}${attachment}${edited}${threadText(item.thread, false)}`, keyboard: inlineKeyboard([
+  const heading = lang === "ru" ? "Вопрос" : "Question";
+  return { text: `${heading} #${item.id}\n\n${content}${attachment}${edited}${threadText(item.thread, false)}`, keyboard: inlineKeyboard([
     [inlineButton(trFor(lang, "edit"), `fb:edit:${item.id}`), inlineButton(trFor(lang, "delete"), `fb:delete:${item.id}`)],
     [inlineButton(trFor(lang, "backFeedback"), "fb:list:0")],
   ]) };
