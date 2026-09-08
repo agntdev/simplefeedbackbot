@@ -13,7 +13,7 @@
     "steps": [
       {
         "send": { "callback": "fb:type:photo" },
-        "expect": [{ "method": "editMessageText", "payload": { "text": "Send the photo you want to submit." } }]
+        "expect": [{ "method": "editMessageText", "payload": { "text": "Send the photo you want to attach to your question." } }]
       }
     ]
   },

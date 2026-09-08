@@ -13,12 +13,15 @@ function languageKeyboard() {
 
 async function menu(ctx: Ctx) {
   const lang = await language(ctx);
-  const items = mainMenuItems().map((item) => ({ ...item, label: item.data === "fb:submit" ? (lang === "ru" ? "Отправить отзыв" : "Submit feedback") : item.data === "fb:list:0" ? (lang === "ru" ? "Мои отзывы" : "My feedback") : item.label }));
+  const items = mainMenuItems().map((item) => ({ ...item, label: item.data === "fb:submit" ? (lang === "ru" ? "Задать вопрос" : "Ask a question") : item.data === "fb:list:0" ? (lang === "ru" ? "Мои вопросы" : "My questions") : item.label }));
   const rows: ReturnType<typeof inlineButton>[][] = [];
   for (let index = 0; index < items.length; index += 2) rows.push(items.slice(index, index + 2).map((item) => inlineButton(item.label, item.data)));
   rows.push([inlineButton(await tr(ctx, "settings"), "settings:open")]);
   // Admins see this immediately after /start and after choosing a language.
-  if (await isAdmin(ctx)) rows.push([inlineButton("Admin", "admin:home")]);
+  if (await isAdmin(ctx)) {
+    rows.push([inlineButton(lang === "ru" ? "Рассылка" : "Broadcast", "admin:broadcast")]);
+    rows.push([inlineButton(lang === "ru" ? "Администрирование" : "Admin", "admin:home")]);
+  }
   rows.push([inlineButton(await tr(ctx, "help"), "menu:help")]);
   return inlineKeyboard(rows);
 }
