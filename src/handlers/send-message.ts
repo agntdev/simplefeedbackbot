@@ -47,7 +47,7 @@ composer.on("message", async (ctx, next) => {
   const item = await submit(ctx, content);
   if (!item) { await ctx.reply((await tr(ctx, "cancelled")) === "Отправка отменена." ? "Не удалось сохранить вопрос. Попробуйте ещё раз." : "Couldn't save your question. Please try again."); return; }
   const text = await receiptText(ctx, item.id);
-  const automaticReply = "Принято в обработку, с вами свяжутся в течение ближайшего времени";
+  const automaticReply = "Принято в обработку — с вами свяжутся в течение ближайшего времени.";
   const ack = await addThreadEntry(ctx, item.id, { type: "ack", timestamp: now(), sent_status: "pending", body_text: automaticReply, attachments: [] });
   ctx.session.feedbackType = undefined;
   try {

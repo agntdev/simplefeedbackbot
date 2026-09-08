@@ -25,7 +25,7 @@
         "send": { "text": "The service was excellent." },
         "expect": [
           { "method": "sendMessage", "payload": { "text": "Your question has been received (ID: 1)." } },
-          { "method": "sendMessage", "payload": { "text": "Принято в обработку, с вами свяжутся в течение ближайшего времени" } }
+          { "method": "sendMessage", "payload": { "text": "Принято в обработку — с вами свяжутся в течение ближайшего времени." } }
         ]
       }
     ]

@@ -3,7 +3,8 @@ import type { Ctx } from "../bot.js";
 import { inlineButton, inlineKeyboard } from "../toolkit/index.js";
 import { isAdmin, requireAdmin } from "../feedback/admin.js";
 import { adminDetailView } from "../feedback/presentation.js";
-import { addThreadEntry, allItems, anyItem, exportItems, markThreadStatus, messageContent, now, purgeDeleted, replyingFeedbackId, setReplyingFeedbackId, type Attachment, type FeedbackItem, type FeedbackThreadEntry } from "../feedback/store.js";
+import { acknowledgeFeedbackReply, addThreadEntry, allItems, anyItem, exportItems, markThreadStatus, messageContent, now, purgeDeleted, replyingFeedbackId, setReplyingFeedbackId, type Attachment, type FeedbackItem, type FeedbackThreadEntry } from "../feedback/store.js";
+import { language } from "../i18n.js";
 
 const composer = new Composer<Ctx>();
 
@@ -50,7 +51,9 @@ async function deliverAttachment(ctx: Ctx, chatId: number, attachment: Attachmen
 async function deliverReply(ctx: Ctx, item: FeedbackItem, entry: FeedbackThreadEntry): Promise<boolean> {
   const intro = `Reply from admin ${entry.admin_display_name ?? ""}:`.trim();
   try {
-    await ctx.api.sendMessage(item.user_id, entry.body_text ? `${intro}\n${entry.body_text}` : intro);
+    await ctx.api.sendMessage(item.user_id, entry.body_text ? `${intro}\n${entry.body_text}` : intro, {
+      reply_markup: inlineKeyboard([[inlineButton("Я вижу", `fb:ack:${item.id}:${entry.id}`)]]),
+    });
     for (const attachment of entry.attachments) await deliverAttachment(ctx, item.user_id, attachment);
     await markThreadStatus(ctx, item.id, entry.id, "sent");
     return true;
@@ -112,6 +115,13 @@ composer.callbackQuery(/^fb:retry:(\d+):(\d+)$/, async (ctx) => {
   const entry = item?.thread?.find((candidate) => candidate.id === Number(ctx.match[2]) && candidate.type === "admin_reply");
   if (!item || !entry || entry.sent_status !== "failed") { await ctx.editMessageText("That reply isn't available to retry."); return; }
   await ctx.editMessageText(await deliverReply(ctx, item, entry) ? "The reply was delivered." : "It still couldn't be delivered. You can try again later.", { reply_markup: adminDetailView(item).keyboard });
+});
+
+composer.callbackQuery(/^fb:ack:(\d+):(\d+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const result = await acknowledgeFeedbackReply(ctx, Number(ctx.match[1]), Number(ctx.match[2]));
+  const ru = (await language(ctx)) === "ru";
+  await ctx.reply(result === "saved" ? (ru ? "Отмечено." : "Acknowledged.") : result === "duplicate" ? (ru ? "Вы уже подтвердили получение." : "You already acknowledged this reply.") : (ru ? "Это подтверждение недоступно." : "That acknowledgement isn't available."));
 });
 
 composer.callbackQuery("fb:export", async (ctx) => {

@@ -73,7 +73,7 @@ type StoredFeedback = {
 };
 type StoredThreadEntry = {
   id: number;
-  type: "ack" | "admin_reply";
+  type: "ack" | "admin_reply" | "recipient_ack";
   timestamp: number;
   sent_status: "pending" | "sent" | "failed";
   admin_id?: number;
@@ -319,6 +319,14 @@ export class ChatDO {
         const entry = (item.thread ?? []).find((value) => value.id === body.entryId);
         if (!entry) response = { ok: false };
         else { entry.sent_status = body.sent_status; response = { ok: true }; }
+      } else if (body.action === "feedback:ack" && item && userId !== undefined && body.entryId !== undefined) {
+        const reply = (item.thread ?? []).find((value) => value.id === body.entryId && value.type === "admin_reply");
+        if (item.user_id !== userId || !reply) response = { result: "unavailable" };
+        else if ((item.thread ?? []).some((value) => value.type === "recipient_ack" && value.admin_id === body.entryId)) response = { result: "duplicate" };
+        else {
+          item.thread.push({ id: db.nextThreadId++, type: "recipient_ack", timestamp: at, sent_status: "sent", admin_id: body.entryId, body_text: "Recipient acknowledged the reply.", attachments: [] });
+          response = { result: "saved" };
+        }
       } else {
         return new Response("bad feedback request", { status: 400 });
       }

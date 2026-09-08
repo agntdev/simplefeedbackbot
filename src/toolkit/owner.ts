@@ -62,6 +62,23 @@ function readAdminFromEnv(
   return undefined;
 }
 
+/**
+ * Some deployments provide more than one trusted administrator in the same
+ * platform setting.  Treat comma, semicolon, or whitespace separated numeric
+ * values as individual Telegram IDs.  The first value remains the notification
+ * target returned by adminChatId; every value is a trusted administrator.
+ */
+function configuredAdminIds(
+  env: Record<string, unknown> | null | undefined,
+): string[] {
+  const raw = readAdminFromEnv(env);
+  if (!raw) return [];
+  return raw
+    .split(/[;,\s]+/)
+    .map((value) => value.trim())
+    .filter((value) => /^-?\d+$/.test(value));
+}
+
 function nodeProcessEnv(): Record<string, unknown> | undefined {
   // Workers / edge: no process. Harness + Node long-poll: secrets may live here.
   if (typeof process === "undefined" || process.env === undefined) return undefined;
@@ -75,9 +92,15 @@ function nodeProcessEnv(): Record<string, unknown> | undefined {
 export function adminChatId(ctx: {
   env?: Record<string, unknown> | null;
 }): string | undefined {
-  return (
-    readAdminFromEnv(ctx.env ?? undefined) ?? readAdminFromEnv(nodeProcessEnv())
-  );
+  return adminChatIds(ctx)[0];
+}
+
+/** All trusted administrator IDs from the platform setting. */
+export function adminChatIds(ctx: {
+  env?: Record<string, unknown> | null;
+}): string[] {
+  const fromWorker = configuredAdminIds(ctx.env ?? undefined);
+  return fromWorker.length > 0 ? fromWorker : configuredAdminIds(nodeProcessEnv());
 }
 
 /** True when the update's user (or private chat) matches the injected owner id. */
@@ -86,11 +109,11 @@ export function isOwner(ctx: {
   from?: { id: number } | undefined;
   chat?: { id: number } | undefined;
 }): boolean {
-  const admin = adminChatId(ctx);
-  if (admin === undefined) return false;
-  if (ctx.from?.id !== undefined && String(ctx.from.id) === admin) return true;
+  const admins = adminChatIds(ctx);
+  if (admins.length === 0) return false;
+  if (ctx.from?.id !== undefined && admins.includes(String(ctx.from.id))) return true;
   // Private chats: chat id equals user id — notify targets often use chat id.
-  if (ctx.chat?.id !== undefined && String(ctx.chat.id) === admin) return true;
+  if (ctx.chat?.id !== undefined && admins.includes(String(ctx.chat.id))) return true;
   return false;
 }
 
