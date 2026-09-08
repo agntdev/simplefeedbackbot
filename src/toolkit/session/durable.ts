@@ -87,11 +87,16 @@ type FeedbackDb = {
   items: Record<string, StoredFeedback>;
   userItemIds: Record<string, number[]>;
   users: Record<string, { telegram_id: number; display_name: string; username?: string }>;
+  admins: Record<string, { user_id: number; granted_by: number; granted_at: number }>;
+  audits: Array<{ action: "grant" | "revoke" | "broadcast"; target_user_id?: number; actor_id: number; timestamp: number; detail?: string }>;
+  broadcasts: unknown[];
+  nextBroadcastId: number;
 };
+type ScheduledBroadcast = { record: Record<string, unknown>; recipients: number[] };
 const FEEDBACK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function emptyFeedbackDb(): FeedbackDb {
-  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {} };
+  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {}, admins: {}, audits: [], broadcasts: [], nextBroadcastId: 1 };
 }
 
 function purgeFeedback(db: FeedbackDb, at: number): number {
@@ -218,8 +223,11 @@ export class ChatDO {
         action: string; at: number; user?: { telegram_id: number; display_name: string; username?: string };
         userId?: number; id?: number; entryId?: number; sent_status?: StoredThreadEntry["sent_status"];
         content?: { text: string; attachments: StoredAttachment[] }; entry?: Omit<StoredThreadEntry, "id">;
+        targetUserId?: number; actorId?: number; record?: Record<string, unknown>; recipients?: number[];
       };
       const db = (await this.state.storage.get<FeedbackDb>("feedback-db")) ?? emptyFeedbackDb();
+      // Records written by an earlier release are upgraded in place.
+      db.admins ??= {}; db.audits ??= []; db.broadcasts ??= []; db.nextBroadcastId ??= 1;
       const at = Number.isFinite(body.at) ? body.at : 0;
       const userId = body.userId;
       const item = body.id === undefined ? undefined : db.items[String(body.id)];
@@ -246,6 +254,35 @@ export class ChatDO {
         response = item ?? null;
       } else if (body.action === "all") {
         purgeFeedback(db, at); response = Object.values(db.items).sort((a, b) => b.id - a.id);
+      } else if (body.action === "users") {
+        response = Object.values(db.users);
+      } else if (body.action === "admins") {
+        response = Object.values(db.admins);
+      } else if (body.action === "admin:check" && body.userId !== undefined) {
+        response = { ok: Boolean(db.admins[String(body.userId)]) };
+      } else if (body.action === "admin:grant" && body.targetUserId !== undefined && body.actorId !== undefined) {
+        if (!db.users[String(body.targetUserId)] || db.admins[String(body.targetUserId)]) response = { ok: false };
+        else { db.admins[String(body.targetUserId)] = { user_id: body.targetUserId, granted_by: body.actorId, granted_at: at }; db.audits.push({ action: "grant", target_user_id: body.targetUserId, actor_id: body.actorId, timestamp: at }); response = { ok: true }; }
+      } else if (body.action === "admin:revoke" && body.targetUserId !== undefined && body.actorId !== undefined) {
+        if (!db.admins[String(body.targetUserId)]) response = { ok: false };
+        else { delete db.admins[String(body.targetUserId)]; db.audits.push({ action: "revoke", target_user_id: body.targetUserId, actor_id: body.actorId, timestamp: at }); response = { ok: true }; }
+      } else if (body.action === "audits") {
+        response = [...db.audits].sort((a, b) => b.timestamp - a.timestamp);
+      } else if (body.action === "broadcast:record" && body.record) {
+        const record = { ...body.record, id: db.nextBroadcastId++ };
+        db.broadcasts.push(record);
+        db.audits.push({ action: "broadcast", actor_id: Number(body.record.initiator_id), timestamp: at, detail: `${Number(body.record.recipients_count) || 0} recipients` });
+        response = record;
+      } else if (body.action === "broadcast:schedule" && body.record && Array.isArray(body.recipients)) {
+        const record = { ...body.record, id: db.nextBroadcastId++, status: "scheduled" };
+        db.broadcasts.push(record);
+        db.audits.push({ action: "broadcast", actor_id: Number(body.record.initiator_id), timestamp: at, detail: `${body.recipients.length} scheduled recipients` });
+        const jobs = (await this.state.storage.get<ScheduledBroadcast[]>("scheduled-broadcasts")) ?? [];
+        jobs.push({ record, recipients: body.recipients });
+        await this.state.storage.put("scheduled-broadcasts", jobs);
+        const due = Number(body.record.scheduled_at);
+        if (Number.isFinite(due)) await this.state.storage.setAlarm(due);
+        response = record;
       } else if (body.action === "update" && userId !== undefined && body.content) {
         if (!item || item.user_id !== userId || item.status !== "active") response = null;
         else { item.text = body.content.text; item.attachments = body.content.attachments; item.last_edited = at; response = item; }
@@ -284,7 +321,31 @@ export class ChatDO {
       await tg(this.env.BOT_TOKEN, "sendMessage", { chat_id: r.chatId, text: r.text });
     }
     await this.state.storage.put("reminders", rest);
-    await this.rearm(rest);
+    const jobs = (await this.state.storage.get<ScheduledBroadcast[]>("scheduled-broadcasts")) ?? [];
+    const dueJobs = jobs.filter((job) => Number(job.record.scheduled_at) <= now);
+    const futureJobs = jobs.filter((job) => Number(job.record.scheduled_at) > now);
+    for (const job of dueJobs) await this.deliverBroadcast(job);
+    await this.state.storage.put("scheduled-broadcasts", futureJobs);
+    const times = [...rest.map((r) => r.at), ...futureJobs.map((job) => Number(job.record.scheduled_at)).filter(Number.isFinite)];
+    if (times.length) await this.state.storage.setAlarm(Math.min(...times));
+  }
+
+  private async deliverBroadcast(job: ScheduledBroadcast): Promise<void> {
+    const text = typeof job.record.text === "string" && job.record.text ? job.record.text : "Update from the team";
+    const buttons = Array.isArray(job.record.buttons) ? job.record.buttons : [];
+    const reply_markup = buttons.length ? { inline_keyboard: [buttons.map((button) => ({ text: String((button as Record<string, unknown>).text), url: String((button as Record<string, unknown>).url) }))] } : undefined;
+    const attachments = Array.isArray(job.record.attachments) ? job.record.attachments : [];
+    for (const chat_id of job.recipients) {
+      try {
+        await tg(this.env.BOT_TOKEN, "sendMessage", { chat_id, text, reply_markup });
+        for (const attachment of attachments) {
+          const a = attachment as Record<string, unknown>; const file = a.fileId;
+          if (typeof file !== "string") continue;
+          const method = a.kind === "photo" ? "sendPhoto" : a.kind === "video" ? "sendVideo" : a.kind === "voice" ? "sendVoice" : "sendDocument";
+          await tg(this.env.BOT_TOKEN, method, { chat_id, [method === "sendPhoto" ? "photo" : method === "sendVideo" ? "video" : method === "sendVoice" ? "voice" : "document"]: file });
+        }
+      } catch { /* Delivery to a blocked user must not stop the remaining audience. */ }
+    }
   }
 
   private async rearm(list: Reminder[]): Promise<void> {

@@ -1,12 +1,12 @@
 [
   {
-    "name": "feedback export is denied until owner access is configured",
+    "name": "feedback export is denied until admin access is configured",
     "steps": [
       {
         "send": { "callback": "fb:export" },
         "expect": [
           { "method": "answerCallbackQuery" },
-          { "method": "sendMessage", "payload": { "text": "Owner access isn't set up yet." } }
+          { "method": "sendMessage", "payload": { "text": "Admin access isn't available for your account." } }
         ]
       }
     ]

@@ -36,6 +36,9 @@ export type FeedbackThreadEntry = {
 };
 
 export type FeedbackUser = { telegram_id: number; display_name: string; username?: string };
+export type AdminRole = { user_id: number; granted_by: number; granted_at: number };
+export type AdminAudit = { action: "grant" | "revoke" | "broadcast"; target_user_id?: number; actor_id: number; timestamp: number; detail?: string };
+export type BroadcastRecord = { id: number; initiator_id: number; timestamp: number; recipients_count: number; status: "sent" | "scheduled"; text: string; attachments: Attachment[]; buttons: Array<{ text: string; url: string }>; scheduled_at?: number };
 
 export type FeedbackDatabase = {
   nextId: number;
@@ -43,6 +46,10 @@ export type FeedbackDatabase = {
   items: Record<string, FeedbackItem>;
   userItemIds: Record<string, number[]>;
   users: Record<string, FeedbackUser>;
+  admins: Record<string, AdminRole>;
+  audits: AdminAudit[];
+  broadcasts: BroadcastRecord[];
+  nextBroadcastId: number;
 };
 type FeedbackSession = { feedbackFallback?: FeedbackDatabase; editingFeedbackId?: number; replyingFeedbackId?: number };
 
@@ -58,7 +65,7 @@ export function setClockForTests(next?: () => number): void {
 }
 
 function emptyDatabase(): FeedbackDatabase {
-  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {} };
+  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {}, admins: {}, audits: [], broadcasts: [], nextBroadcastId: 1 };
 }
 
 function userFromCtx(ctx: Ctx): FeedbackUser | undefined {
@@ -222,6 +229,66 @@ export async function allItems(ctx: Ctx): Promise<FeedbackItem[]> {
   if (remote !== undefined) return remote;
   const db = fallback(ctx); purge(db, now());
   return Object.values(db.items).sort((a, b) => b.id - a.id);
+}
+
+export async function users(ctx: Ctx): Promise<FeedbackUser[]> {
+  const remote = await workerRequest<FeedbackUser[]>(ctx, "users", {});
+  if (remote !== undefined) return remote;
+  return Object.values(fallback(ctx).users);
+}
+
+export async function adminRoles(ctx: Ctx): Promise<AdminRole[]> {
+  const remote = await workerRequest<AdminRole[]>(ctx, "admins", {});
+  if (remote !== undefined) return remote;
+  return Object.values(fallback(ctx).admins);
+}
+
+export async function isStoredAdmin(ctx: Ctx, userId: number | undefined = ctx.from?.id): Promise<boolean> {
+  if (userId === undefined) return false;
+  const remote = await workerRequest<{ ok: boolean }>(ctx, "admin:check", { userId });
+  if (remote !== undefined) return remote.ok;
+  return Boolean(fallback(ctx).admins[String(userId)]);
+}
+
+export async function grantAdmin(ctx: Ctx, targetUserId: number, actorId: number): Promise<boolean> {
+  const remote = await workerRequest<{ ok: boolean }>(ctx, "admin:grant", { targetUserId, actorId });
+  if (remote !== undefined) return remote.ok;
+  const db = fallback(ctx);
+  if (!db.users[String(targetUserId)] || db.admins[String(targetUserId)]) return false;
+  db.admins[String(targetUserId)] = { user_id: targetUserId, granted_by: actorId, granted_at: now() };
+  db.audits.push({ action: "grant", target_user_id: targetUserId, actor_id: actorId, timestamp: now() });
+  return true;
+}
+
+export async function revokeAdmin(ctx: Ctx, targetUserId: number, actorId: number): Promise<boolean> {
+  const remote = await workerRequest<{ ok: boolean }>(ctx, "admin:revoke", { targetUserId, actorId });
+  if (remote !== undefined) return remote.ok;
+  const db = fallback(ctx);
+  if (!db.admins[String(targetUserId)]) return false;
+  delete db.admins[String(targetUserId)];
+  db.audits.push({ action: "revoke", target_user_id: targetUserId, actor_id: actorId, timestamp: now() });
+  return true;
+}
+
+export async function adminAudits(ctx: Ctx): Promise<AdminAudit[]> {
+  const remote = await workerRequest<AdminAudit[]>(ctx, "audits", {});
+  if (remote !== undefined) return remote;
+  return [...fallback(ctx).audits].sort((a, b) => b.timestamp - a.timestamp);
+}
+
+export async function recordBroadcast(ctx: Ctx, record: Omit<BroadcastRecord, "id">): Promise<BroadcastRecord> {
+  const remote = await workerRequest<BroadcastRecord>(ctx, "broadcast:record", { record });
+  if (remote !== undefined) return remote;
+  const db = fallback(ctx); const saved = { ...record, id: db.nextBroadcastId++ };
+  db.broadcasts.push(saved); db.audits.push({ action: "broadcast", actor_id: record.initiator_id, timestamp: record.timestamp, detail: `${record.recipients_count} recipients` });
+  return saved;
+}
+
+export async function scheduleBroadcast(ctx: Ctx, record: Omit<BroadcastRecord, "id">, recipients: number[]): Promise<BroadcastRecord> {
+  const remote = await workerRequest<BroadcastRecord>(ctx, "broadcast:schedule", { record, recipients });
+  if (remote !== undefined) return remote;
+  // The Node/harness fallback cannot run alarms, but still retains the pending job.
+  return recordBroadcast(ctx, { ...record, status: "scheduled" });
 }
 
 export async function anyItem(ctx: Ctx, id: number): Promise<FeedbackItem | undefined> {
