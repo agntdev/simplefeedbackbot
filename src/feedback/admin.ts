@@ -1,6 +1,7 @@
 import type { Ctx } from "../bot.js";
 import { isOwner } from "../toolkit/index.js";
 import { grantAdmin, isStoredAdmin, saveUser } from "./store.js";
+import { tr } from "../i18n.js";
 
 /** Owner is the bootstrap administrator; every additional administrator is durable. */
 export async function isAdmin(ctx: Ctx): Promise<boolean> {
@@ -16,7 +17,7 @@ export async function isAdmin(ctx: Ctx): Promise<boolean> {
 
 export async function requireAdmin(ctx: Ctx): Promise<boolean> {
   if (await isAdmin(ctx)) return true;
-  const text = "Admin access isn't available for your account.";
+  const text = await tr(ctx, "adminDenied");
   try { await ctx.answerCallbackQuery({ text, show_alert: true }); } catch { /* callback may already be answered */ }
   await ctx.reply(text);
   return false;

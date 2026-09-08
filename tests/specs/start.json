@@ -1,16 +1,28 @@
 [
   {
-    "name": "/start replies with the welcome + main menu",
+    "name": "/start asks a new user to choose a language",
     "steps": [
       {
         "send": { "text": "/start" },
         "expect": [
           {
             "method": "sendMessage",
-            "payload": { "text": "Welcome. Choose an option below." }
+            "payload": { "text": "Choose your language / Выберите язык." }
           }
         ]
       }
+    ]
+  }
+  ,
+  {
+    "name": "language selection is persisted and renders the localized menu",
+    "steps": [
+      { "send": { "text": "/start" }, "expect": [{ "method": "sendMessage", "payload": { "text": "Choose your language / Выберите язык." } }] },
+      { "send": { "callback": "lang:ru" }, "expect": [{ "method": "editMessageText", "payload": { "text": "Добро пожаловать. Выберите действие." } }] },
+      { "send": { "text": "/start" }, "expect": [{ "method": "sendMessage", "payload": { "text": "Добро пожаловать. Выберите действие." } }] },
+      { "send": { "callback": "settings:open" }, "expect": [{ "method": "editMessageText", "payload": { "text": "Выберите, что хотите изменить." } }] },
+      { "send": { "callback": "settings:language" }, "expect": [{ "method": "editMessageText", "payload": { "text": "Choose your language / Выберите язык." } }] },
+      { "send": { "callback": "lang:en" }, "expect": [{ "method": "editMessageText", "payload": { "text": "Welcome. Choose an option below." } }] }
     ]
   }
 ]
