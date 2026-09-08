@@ -7,7 +7,7 @@
           {
             "method": "sendMessage",
             "payload": {
-              "text": "Send your feedback as text, a photo, a voice message, or a file."
+              "text": "Choose a format, or send text, a photo, video, voice message, or file."
             }
           }
         ],

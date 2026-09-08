@@ -1,11 +1,10 @@
 import { Composer, InputFile } from "grammy";
 import type { Ctx } from "../bot.js";
-import { inlineButton, inlineKeyboard, isOwner, registerMainMenuItem, requireOwner } from "../toolkit/index.js";
+import { inlineButton, inlineKeyboard } from "../toolkit/index.js";
+import { isAdmin, requireAdmin } from "../feedback/admin.js";
 import { adminDetailView } from "../feedback/presentation.js";
 import { addThreadEntry, allItems, anyItem, exportItems, markThreadStatus, messageContent, now, purgeDeleted, replyingFeedbackId, setReplyingFeedbackId, type Attachment, type FeedbackItem, type FeedbackThreadEntry } from "../feedback/store.js";
 
-registerMainMenuItem({ label: "Manage feedback", data: "fb:admin:0", order: 80 });
-registerMainMenuItem({ label: "Export feedback", data: "fb:export", order: 90 });
 const composer = new Composer<Ctx>();
 
 function csvCell(value: string | number | undefined): string {
@@ -14,8 +13,8 @@ function csvCell(value: string | number | undefined): string {
 }
 
 function toCsv(items: FeedbackItem[]): string {
-  const header = ["reference_id", "user_id", "username", "submitted_at", "text", "attachments", "status", "last_edited", "deleted_at", "thread"];
-  const rows = items.map((item) => [item.id, item.user_id, item.username, new Date(item.timestamp).toISOString(), item.text, item.attachments.map((a) => a.kind).join("; "), item.status, item.last_edited ? new Date(item.last_edited).toISOString() : "", item.deleted_at ? new Date(item.deleted_at).toISOString() : "", JSON.stringify(item.thread ?? [])].map(csvCell).join(","));
+  const header = ["reference_id", "user_id", "username", "username_url", "submitted_at", "text", "attachments", "status", "last_edited", "deleted_at", "thread"];
+  const rows = items.map((item) => [item.id, item.user_id, item.username, item.username ? `https://t.me/${item.username}` : `tg://user?id=${item.user_id}`, new Date(item.timestamp).toISOString(), item.text, item.attachments.map((a) => a.kind).join("; "), item.status, item.last_edited ? new Date(item.last_edited).toISOString() : "", item.deleted_at ? new Date(item.deleted_at).toISOString() : "", JSON.stringify(item.thread ?? [])].map(csvCell).join(","));
   return [header.join(","), ...rows].join("\n");
 }
 
@@ -49,7 +48,7 @@ async function deliverAttachment(ctx: Ctx, chatId: number, attachment: Attachmen
 }
 
 async function deliverReply(ctx: Ctx, item: FeedbackItem, entry: FeedbackThreadEntry): Promise<boolean> {
-  const intro = `Ответ от администратора ${entry.admin_display_name ?? "Администратор"}:`;
+  const intro = `Reply from admin ${entry.admin_display_name ?? ""}:`.trim();
   try {
     await ctx.api.sendMessage(item.user_id, entry.body_text ? `${intro}\n${entry.body_text}` : intro);
     for (const attachment of entry.attachments) await deliverAttachment(ctx, item.user_id, attachment);
@@ -62,13 +61,13 @@ async function deliverReply(ctx: Ctx, item: FeedbackItem, entry: FeedbackThreadE
 }
 
 composer.callbackQuery(/^fb:admin:(\d+)$/, async (ctx) => {
-  if (!isOwner(ctx)) { await requireOwner(ctx); return; }
+  if (!(await isAdmin(ctx))) { await requireAdmin(ctx); return; }
   await ctx.answerCallbackQuery();
   await showAdminList(ctx, Number(ctx.match[1]));
 });
 
 composer.callbackQuery(/^fb:admin:view:(\d+)$/, async (ctx) => {
-  if (!isOwner(ctx)) { await requireOwner(ctx); return; }
+  if (!(await isAdmin(ctx))) { await requireAdmin(ctx); return; }
   await ctx.answerCallbackQuery();
   const item = await anyItem(ctx, Number(ctx.match[1]));
   if (!item) { await ctx.editMessageText("That feedback item isn't available."); return; }
@@ -77,7 +76,7 @@ composer.callbackQuery(/^fb:admin:view:(\d+)$/, async (ctx) => {
 });
 
 composer.callbackQuery(/^fb:reply:(\d+)$/, async (ctx) => {
-  if (!isOwner(ctx)) { await requireOwner(ctx); return; }
+  if (!(await isAdmin(ctx))) { await requireAdmin(ctx); return; }
   await ctx.answerCallbackQuery();
   const item = await anyItem(ctx, Number(ctx.match[1]));
   if (!item || item.status !== "active") { await ctx.editMessageText("That feedback item isn't available."); return; }
@@ -86,7 +85,7 @@ composer.callbackQuery(/^fb:reply:(\d+)$/, async (ctx) => {
 });
 
 composer.callbackQuery("fb:replycancel", async (ctx) => {
-  if (!isOwner(ctx)) { await requireOwner(ctx); return; }
+  if (!(await isAdmin(ctx))) { await requireAdmin(ctx); return; }
   await ctx.answerCallbackQuery();
   setReplyingFeedbackId(ctx, undefined);
   await ctx.editMessageText("Reply cancelled.");
@@ -95,7 +94,7 @@ composer.callbackQuery("fb:replycancel", async (ctx) => {
 composer.on("message", async (ctx, next) => {
   const feedbackId = replyingFeedbackId(ctx);
   if (feedbackId === undefined) return next();
-  if (!isOwner(ctx)) { setReplyingFeedbackId(ctx, undefined); await ctx.reply("Only the owner can send replies."); return; }
+  if (!(await isAdmin(ctx))) { setReplyingFeedbackId(ctx, undefined); await ctx.reply("Only an admin can send replies."); return; }
   const content = messageContent(ctx);
   if (!content || (ctx.message?.text?.startsWith("/") ?? false)) return next();
   const item = await anyItem(ctx, feedbackId);
@@ -107,7 +106,7 @@ composer.on("message", async (ctx, next) => {
 });
 
 composer.callbackQuery(/^fb:retry:(\d+):(\d+)$/, async (ctx) => {
-  if (!isOwner(ctx)) { await requireOwner(ctx); return; }
+  if (!(await isAdmin(ctx))) { await requireAdmin(ctx); return; }
   await ctx.answerCallbackQuery();
   const item = await anyItem(ctx, Number(ctx.match[1]));
   const entry = item?.thread?.find((candidate) => candidate.id === Number(ctx.match[2]) && candidate.type === "admin_reply");
@@ -116,7 +115,7 @@ composer.callbackQuery(/^fb:retry:(\d+):(\d+)$/, async (ctx) => {
 });
 
 composer.callbackQuery("fb:export", async (ctx) => {
-  if (!isOwner(ctx)) { await requireOwner(ctx); return; }
+  if (!(await isAdmin(ctx))) { await requireAdmin(ctx); return; }
   await ctx.answerCallbackQuery();
   const items = await exportItems(ctx);
   await ctx.replyWithDocument(new InputFile(new TextEncoder().encode(toCsv(items)), "feedback-export.csv"), { caption: items.length ? "Your feedback export is ready." : "There is no feedback to export yet." });
@@ -124,7 +123,7 @@ composer.callbackQuery("fb:export", async (ctx) => {
 });
 
 composer.callbackQuery("fb:purge", async (ctx) => {
-  if (!isOwner(ctx)) { await requireOwner(ctx); return; }
+  if (!(await isAdmin(ctx))) { await requireAdmin(ctx); return; }
   await ctx.answerCallbackQuery();
   const removed = await purgeDeleted(ctx);
   await ctx.editMessageText(removed === 0 ? "No expired deleted feedback to remove." : `Removed ${removed} expired feedback item${removed === 1 ? "" : "s"}.`, { reply_markup: inlineKeyboard([[inlineButton("Back to menu", "menu:main")]]) });
