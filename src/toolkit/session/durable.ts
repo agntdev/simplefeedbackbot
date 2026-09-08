@@ -69,9 +69,21 @@ type StoredFeedback = {
   status: "active" | "deleted";
   last_edited?: number;
   deleted_at?: number;
+  thread: StoredThreadEntry[];
+};
+type StoredThreadEntry = {
+  id: number;
+  type: "ack" | "admin_reply";
+  timestamp: number;
+  sent_status: "pending" | "sent" | "failed";
+  admin_id?: number;
+  admin_display_name?: string;
+  body_text: string;
+  attachments: StoredAttachment[];
 };
 type FeedbackDb = {
   nextId: number;
+  nextThreadId: number;
   items: Record<string, StoredFeedback>;
   userItemIds: Record<string, number[]>;
   users: Record<string, { telegram_id: number; display_name: string; username?: string }>;
@@ -79,7 +91,7 @@ type FeedbackDb = {
 const FEEDBACK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function emptyFeedbackDb(): FeedbackDb {
-  return { nextId: 1, items: {}, userItemIds: {}, users: {} };
+  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {} };
 }
 
 function purgeFeedback(db: FeedbackDb, at: number): number {
@@ -204,7 +216,8 @@ export class ChatDO {
     if (url.pathname === "/feedback" && request.method === "POST") {
       const body = (await request.json()) as {
         action: string; at: number; user?: { telegram_id: number; display_name: string; username?: string };
-        userId?: number; id?: number; content?: { text: string; attachments: StoredAttachment[] };
+        userId?: number; id?: number; entryId?: number; sent_status?: StoredThreadEntry["sent_status"];
+        content?: { text: string; attachments: StoredAttachment[] }; entry?: Omit<StoredThreadEntry, "id">;
       };
       const db = (await this.state.storage.get<FeedbackDb>("feedback-db")) ?? emptyFeedbackDb();
       const at = Number.isFinite(body.at) ? body.at : 0;
@@ -217,7 +230,7 @@ export class ChatDO {
       } else if (body.action === "submit" && body.user && body.content) {
         db.users[String(body.user.telegram_id)] = body.user;
         const id = db.nextId++;
-        const created: StoredFeedback = { id, user_id: body.user.telegram_id, username: body.user.username, timestamp: at, text: body.content.text, attachments: body.content.attachments, status: "active" };
+        const created: StoredFeedback = { id, user_id: body.user.telegram_id, username: body.user.username, timestamp: at, text: body.content.text, attachments: body.content.attachments, status: "active", thread: [] };
         db.items[String(id)] = created;
         (db.userItemIds[String(created.user_id)] ??= []).push(id);
         response = created;
@@ -229,6 +242,10 @@ export class ChatDO {
           .filter((v): v is StoredFeedback => Boolean(v) && (includeDeleted || v.status === "active"));
       } else if (body.action === "owned" && userId !== undefined) {
         response = item?.user_id === userId ? item : null;
+      } else if (body.action === "any") {
+        response = item ?? null;
+      } else if (body.action === "all") {
+        purgeFeedback(db, at); response = Object.values(db.items).sort((a, b) => b.id - a.id);
       } else if (body.action === "update" && userId !== undefined && body.content) {
         if (!item || item.user_id !== userId || item.status !== "active") response = null;
         else { item.text = body.content.text; item.attachments = body.content.attachments; item.last_edited = at; response = item; }
@@ -239,6 +256,13 @@ export class ChatDO {
         response = { removed: purgeFeedback(db, at) };
       } else if (body.action === "export") {
         purgeFeedback(db, at); response = Object.values(db.items);
+      } else if (body.action === "thread:add" && item && body.entry) {
+        const entry: StoredThreadEntry = { ...body.entry, id: db.nextThreadId++ };
+        (item.thread ??= []).push(entry); response = entry;
+      } else if (body.action === "thread:status" && item && body.entryId !== undefined && body.sent_status) {
+        const entry = (item.thread ?? []).find((value) => value.id === body.entryId);
+        if (!entry) response = { ok: false };
+        else { entry.sent_status = body.sent_status; response = { ok: true }; }
       } else {
         return new Response("bad feedback request", { status: 400 });
       }

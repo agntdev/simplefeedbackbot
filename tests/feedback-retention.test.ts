@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Ctx } from "../src/bot.js";
-import { RETENTION_MS, exportItems, setClockForTests, softDelete, submit } from "../src/feedback/store.js";
+import { RETENTION_MS, addThreadEntry, exportItems, setClockForTests, softDelete, submit } from "../src/feedback/store.js";
 
 function context(): Ctx {
   return {
@@ -17,6 +17,9 @@ describe("feedback retention", () => {
     setClockForTests(() => 1_000);
     const item = await submit(ctx, { text: "Keep this briefly", attachments: [] });
     expect(item?.id).toBe(1);
+    const acknowledgement = await addThreadEntry(ctx, item!.id, { type: "ack", timestamp: 1_000, sent_status: "sent", body_text: "Receipt", attachments: [] });
+    expect(acknowledgement?.type).toBe("ack");
+    expect((await exportItems(ctx))[0].thread).toHaveLength(1);
     expect(await softDelete(ctx, 1)).toBe(true);
 
     setClockForTests(() => 1_000 + RETENTION_MS - 1);
