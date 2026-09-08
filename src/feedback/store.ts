@@ -19,17 +19,32 @@ export type FeedbackItem = {
   status: "active" | "deleted";
   last_edited?: number;
   deleted_at?: number;
+  thread: FeedbackThreadEntry[];
+};
+
+/** Messages the bot sends about a feedback item. Kept with the item so an
+ * export always contains the complete conversation. */
+export type FeedbackThreadEntry = {
+  id: number;
+  type: "ack" | "admin_reply";
+  timestamp: number;
+  sent_status: "pending" | "sent" | "failed";
+  admin_id?: number;
+  admin_display_name?: string;
+  body_text: string;
+  attachments: Attachment[];
 };
 
 export type FeedbackUser = { telegram_id: number; display_name: string; username?: string };
 
 export type FeedbackDatabase = {
   nextId: number;
+  nextThreadId: number;
   items: Record<string, FeedbackItem>;
   userItemIds: Record<string, number[]>;
   users: Record<string, FeedbackUser>;
 };
-type FeedbackSession = { feedbackFallback?: FeedbackDatabase; editingFeedbackId?: number };
+type FeedbackSession = { feedbackFallback?: FeedbackDatabase; editingFeedbackId?: number; replyingFeedbackId?: number };
 
 export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -43,7 +58,7 @@ export function setClockForTests(next?: () => number): void {
 }
 
 function emptyDatabase(): FeedbackDatabase {
-  return { nextId: 1, items: {}, userItemIds: {}, users: {} };
+  return { nextId: 1, nextThreadId: 1, items: {}, userItemIds: {}, users: {} };
 }
 
 function userFromCtx(ctx: Ctx): FeedbackUser | undefined {
@@ -131,6 +146,8 @@ export function editingFeedbackId(ctx: Ctx): number | undefined {
 export function setEditingFeedbackId(ctx: Ctx, id: number | undefined): void {
   (ctx.session as FeedbackSession).editingFeedbackId = id;
 }
+export function replyingFeedbackId(ctx: Ctx): number | undefined { return (ctx.session as FeedbackSession).replyingFeedbackId; }
+export function setReplyingFeedbackId(ctx: Ctx, id: number | undefined): void { (ctx.session as FeedbackSession).replyingFeedbackId = id; }
 
 export async function saveUser(ctx: Ctx): Promise<void> {
   const user = userFromCtx(ctx);
@@ -147,7 +164,7 @@ export async function submit(ctx: Ctx, content: { text: string; attachments: Att
   const db = fallback(ctx);
   db.users[String(user.telegram_id)] = user;
   const id = db.nextId++;
-  const item: FeedbackItem = { id, user_id: user.telegram_id, username: user.username, timestamp: now(), text: content.text, attachments: content.attachments, status: "active" };
+  const item: FeedbackItem = { id, user_id: user.telegram_id, username: user.username, timestamp: now(), text: content.text, attachments: content.attachments, status: "active", thread: [] };
   db.items[String(id)] = item;
   (db.userItemIds[String(user.telegram_id)] ??= []).push(id);
   return item;
@@ -198,4 +215,37 @@ export async function exportItems(ctx: Ctx): Promise<FeedbackItem[]> {
   const remote = await workerRequest<FeedbackItem[]>(ctx, "export", {});
   if (remote !== undefined) return remote;
   const db = fallback(ctx); purge(db, now()); return Object.values(db.items);
+}
+
+export async function allItems(ctx: Ctx): Promise<FeedbackItem[]> {
+  const remote = await workerRequest<FeedbackItem[]>(ctx, "all", {});
+  if (remote !== undefined) return remote;
+  const db = fallback(ctx); purge(db, now());
+  return Object.values(db.items).sort((a, b) => b.id - a.id);
+}
+
+export async function anyItem(ctx: Ctx, id: number): Promise<FeedbackItem | undefined> {
+  const remote = await workerRequest<FeedbackItem | null>(ctx, "any", { id });
+  if (remote !== undefined) return remote ?? undefined;
+  return fallback(ctx).items[String(id)];
+}
+
+export async function addThreadEntry(ctx: Ctx, id: number, entry: Omit<FeedbackThreadEntry, "id">): Promise<FeedbackThreadEntry | undefined> {
+  const remote = await workerRequest<FeedbackThreadEntry | null>(ctx, "thread:add", { id, entry });
+  if (remote !== undefined) return remote ?? undefined;
+  const db = fallback(ctx); const item = db.items[String(id)];
+  if (!item) return undefined;
+  const saved = { ...entry, id: db.nextThreadId++ };
+  item.thread ??= [];
+  item.thread.push(saved);
+  return saved;
+}
+
+export async function markThreadStatus(ctx: Ctx, feedbackId: number, entryId: number, sent_status: FeedbackThreadEntry["sent_status"]): Promise<boolean> {
+  const remote = await workerRequest<{ ok: boolean }>(ctx, "thread:status", { id: feedbackId, entryId, sent_status });
+  if (remote !== undefined) return remote.ok;
+  const entry = fallback(ctx).items[String(feedbackId)]?.thread?.find((v) => v.id === entryId);
+  if (!entry) return false;
+  entry.sent_status = sent_status;
+  return true;
 }

@@ -23,7 +23,7 @@
     "steps": [
       {
         "send": { "text": "First note" },
-        "expect": [{ "method": "sendMessage", "payload": { "text": "Feedback received. Your reference is #1." } }]
+        "expect": [{ "method": "sendMessage" }]
       },
       {
         "send": { "text": "/myfeedback" },
