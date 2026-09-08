@@ -35,7 +35,8 @@ export type FeedbackThreadEntry = {
   attachments: Attachment[];
 };
 
-export type FeedbackUser = { telegram_id: number; display_name: string; username?: string };
+export type Language = "en" | "ru";
+export type FeedbackUser = { telegram_id: number; display_name: string; username?: string; language?: Language };
 export type AdminRole = { user_id: number; granted_by: number; granted_at: number };
 export type AdminAudit = { action: "grant" | "revoke" | "broadcast"; target_user_id?: number; actor_id: number; timestamp: number; detail?: string };
 export type BroadcastRecord = { id: number; initiator_id: number; timestamp: number; recipients_count: number; status: "sent" | "scheduled"; text: string; attachments: Attachment[]; buttons: Array<{ text: string; url: string }>; scheduled_at?: number };
@@ -160,7 +161,23 @@ export async function saveUser(ctx: Ctx): Promise<void> {
   const user = userFromCtx(ctx);
   if (!user) return;
   if (await workerRequest<{ ok: true }>(ctx, "user", { user }) !== undefined) return;
-  fallback(ctx).users[String(user.telegram_id)] = user;
+  fallback(ctx).users[String(user.telegram_id)] = { ...fallback(ctx).users[String(user.telegram_id)], ...user };
+}
+
+/** Language is durable profile data, never conversational session state. */
+export async function getUserLanguage(ctx: Ctx): Promise<Language | undefined> {
+  if (!ctx.from) return undefined;
+  const remote = await workerRequest<FeedbackUser | null>(ctx, "user:get", { userId: ctx.from.id });
+  if (remote !== undefined) return remote?.language;
+  return fallback(ctx).users[String(ctx.from.id)]?.language;
+}
+
+export async function setUserLanguage(ctx: Ctx, language: Language): Promise<void> {
+  const user = userFromCtx(ctx);
+  if (!user) return;
+  user.language = language;
+  if (await workerRequest<{ ok: true }>(ctx, "user", { user }) !== undefined) return;
+  fallback(ctx).users[String(user.telegram_id)] = { ...fallback(ctx).users[String(user.telegram_id)], ...user };
 }
 
 export async function submit(ctx: Ctx, content: { text: string; attachments: Attachment[] }): Promise<FeedbackItem | undefined> {
@@ -169,7 +186,7 @@ export async function submit(ctx: Ctx, content: { text: string; attachments: Att
   const remote = await workerRequest<FeedbackItem>(ctx, "submit", { user, content });
   if (remote !== undefined) return remote;
   const db = fallback(ctx);
-  db.users[String(user.telegram_id)] = user;
+  db.users[String(user.telegram_id)] = { ...db.users[String(user.telegram_id)], ...user };
   const id = db.nextId++;
   const item: FeedbackItem = { id, user_id: user.telegram_id, username: user.username, timestamp: now(), text: content.text, attachments: content.attachments, status: "active", thread: [] };
   db.items[String(id)] = item;

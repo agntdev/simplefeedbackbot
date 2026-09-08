@@ -86,7 +86,7 @@ type FeedbackDb = {
   nextThreadId: number;
   items: Record<string, StoredFeedback>;
   userItemIds: Record<string, number[]>;
-  users: Record<string, { telegram_id: number; display_name: string; username?: string }>;
+  users: Record<string, { telegram_id: number; display_name: string; username?: string; language?: "en" | "ru" }>;
   admins: Record<string, { user_id: number; granted_by: number; granted_at: number }>;
   audits: Array<{ action: "grant" | "revoke" | "broadcast"; target_user_id?: number; actor_id: number; timestamp: number; detail?: string }>;
   broadcasts: unknown[];
@@ -233,10 +233,12 @@ export class ChatDO {
       const item = body.id === undefined ? undefined : db.items[String(body.id)];
       let response: unknown;
       if (body.action === "user" && body.user) {
-        db.users[String(body.user.telegram_id)] = body.user;
+        db.users[String(body.user.telegram_id)] = { ...db.users[String(body.user.telegram_id)], ...body.user };
         response = { ok: true };
+      } else if (body.action === "user:get" && userId !== undefined) {
+        response = db.users[String(userId)] ?? null;
       } else if (body.action === "submit" && body.user && body.content) {
-        db.users[String(body.user.telegram_id)] = body.user;
+        db.users[String(body.user.telegram_id)] = { ...db.users[String(body.user.telegram_id)], ...body.user };
         const id = db.nextId++;
         const created: StoredFeedback = { id, user_id: body.user.telegram_id, username: body.user.username, timestamp: at, text: body.content.text, attachments: body.content.attachments, status: "active", thread: [] };
         db.items[String(id)] = created;
