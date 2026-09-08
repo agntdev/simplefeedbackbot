@@ -23,7 +23,7 @@ function label(user: FeedbackUser): string { return user.username ? `@${user.use
 function profileUrl(user: FeedbackUser): string { return user.username ? `https://t.me/${user.username}` : `tg://user?id=${user.telegram_id}`; }
 async function adminKeyboard(ctx: Ctx) {
   const ru = (await language(ctx)) === "ru";
-  return inlineKeyboard([[inlineButton(ru ? "Пользователи" : "Users", "admin:users:0"), inlineButton(ru ? "Статистика" : "Statistics", "admin:stats")], [inlineButton(ru ? "Экспорт CSV" : "Export CSV", "admin:export"), inlineButton(ru ? "Рассылка" : "Broadcast", "admin:broadcast")], [inlineButton(ru ? "Статистика рассылок" : "Broadcast stats", "admin:broadcasts"), inlineButton(ru ? "Журнал действий" : "Audit log", "admin:audits")], [inlineButton(await tr(ctx, "backMenu"), "menu:main")]]);
+  return inlineKeyboard([[inlineButton(ru ? "Пользователи" : "Users", "admin:users:0"), inlineButton(ru ? "Статистика" : "Statistics", "admin:stats")], [inlineButton(ru ? "Все вопросы" : "Feedback review", "fb:admin:0"), inlineButton(ru ? "Экспорт CSV" : "Export CSV", "admin:export")], [inlineButton(ru ? "Рассылка" : "Broadcast", "admin:broadcast"), inlineButton(ru ? "Статистика рассылок" : "Broadcast stats", "admin:broadcasts")], [inlineButton(ru ? "Журнал действий" : "Audit log", "admin:audits")], [inlineButton(await tr(ctx, "backMenu"), "menu:main")]]);
 }
 async function open(ctx: Ctx, edit = true): Promise<void> {
   const text = "Admin panel\n\nReview feedback, manage roles, export data, or send an update.";

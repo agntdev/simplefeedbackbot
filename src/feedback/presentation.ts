@@ -21,7 +21,7 @@ function threadText(entries: FeedbackThreadEntry[] | undefined, includeAcknowled
   const visible = (entries ?? []).filter((entry) => includeAcknowledgements || entry.type !== "ack");
   if (!visible.length) return "";
   return "\n\nConversation\n" + visible.map((entry) => {
-    const who = entry.type === "ack" ? "Receipt confirmation" : `Administrator ${entry.admin_display_name ?? ""}`.trim();
+    const who = entry.type === "ack" ? "Receipt confirmation" : entry.type === "recipient_ack" ? "Recipient acknowledgement" : `Administrator ${entry.admin_display_name ?? ""}`.trim();
     const body = entry.body_text || (entry.attachments.length ? `Attachment: ${entry.attachments.map((a) => a.kind).join(", ")}` : "");
     return `${who}: ${body}${entry.sent_status === "failed" ? " (not delivered)" : ""}`;
   }).join("\n");

@@ -20,7 +20,7 @@ async function menu(ctx: Ctx) {
   // Admins see this immediately after /start and after choosing a language.
   if (await isAdmin(ctx)) {
     rows.push([inlineButton(lang === "ru" ? "Рассылка" : "Broadcast", "admin:broadcast")]);
-    rows.push([inlineButton(lang === "ru" ? "Администрирование" : "Admin", "admin:home")]);
+    rows.push([inlineButton("Admin", "admin:home")]);
   }
   rows.push([inlineButton(await tr(ctx, "help"), "menu:help")]);
   return inlineKeyboard(rows);

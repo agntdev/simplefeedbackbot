@@ -26,7 +26,7 @@ export type FeedbackItem = {
  * export always contains the complete conversation. */
 export type FeedbackThreadEntry = {
   id: number;
-  type: "ack" | "admin_reply";
+  type: "ack" | "admin_reply" | "recipient_ack";
   timestamp: number;
   sent_status: "pending" | "sent" | "failed";
   admin_id?: number;
@@ -375,4 +375,20 @@ export async function markThreadStatus(ctx: Ctx, feedbackId: number, entryId: nu
   if (!entry) return false;
   entry.sent_status = sent_status;
   return true;
+}
+
+/** Record one "I saw it" acknowledgement for the feedback owner's received
+ * admin reply. Both ownership and duplicate protection are enforced by the
+ * durable store so a forged callback cannot acknowledge somebody else's item. */
+export async function acknowledgeFeedbackReply(ctx: Ctx, feedbackId: number, replyId: number): Promise<"saved" | "duplicate" | "unavailable"> {
+  if (!ctx.from) return "unavailable";
+  const remote = await workerRequest<{ result: "saved" | "duplicate" | "unavailable" }>(ctx, "feedback:ack", { id: feedbackId, entryId: replyId, userId: ctx.from.id });
+  if (remote !== undefined) return remote.result;
+  const db = fallback(ctx);
+  const item = db.items[String(feedbackId)];
+  const reply = item?.thread.find((entry) => entry.id === replyId && entry.type === "admin_reply");
+  if (!item || item.user_id !== ctx.from.id || !reply) return "unavailable";
+  if (item.thread.some((entry) => entry.type === "recipient_ack" && entry.admin_id === replyId)) return "duplicate";
+  item.thread.push({ id: db.nextThreadId++, type: "recipient_ack", timestamp: now(), sent_status: "sent", admin_id: replyId, body_text: "Recipient acknowledged the reply.", attachments: [] });
+  return "saved";
 }
