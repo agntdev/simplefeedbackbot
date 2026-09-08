@@ -17,7 +17,8 @@ async function menu(ctx: Ctx) {
   const rows: ReturnType<typeof inlineButton>[][] = [];
   for (let index = 0; index < items.length; index += 2) rows.push(items.slice(index, index + 2).map((item) => inlineButton(item.label, item.data)));
   rows.push([inlineButton(await tr(ctx, "settings"), "settings:open")]);
-  if (await isAdmin(ctx)) rows.push([inlineButton(lang === "ru" ? "Панель администратора" : "Admin panel", "admin:home")]);
+  // Admins see this immediately after /start and after choosing a language.
+  if (await isAdmin(ctx)) rows.push([inlineButton("Admin", "admin:home")]);
   rows.push([inlineButton(await tr(ctx, "help"), "menu:help")]);
   return inlineKeyboard(rows);
 }

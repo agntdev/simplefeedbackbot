@@ -16,5 +16,17 @@
         "expect": [{ "method": "editMessageText", "payload": { "text": "Send the photo you want to submit." } }]
       }
     ]
+  },
+  {
+    "name": "a broadcast acknowledgement is recorded only for a recipient",
+    "steps": [
+      {
+        "send": { "callback": "broadcast:ack:999" },
+        "expect": [
+          { "method": "answerCallbackQuery" },
+          { "method": "sendMessage", "payload": { "text": "That broadcast isn't available." } }
+        ]
+      }
+    ]
   }
 ]
